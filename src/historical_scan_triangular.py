@@ -32,6 +32,7 @@ Usage:
 
 import argparse
 import os
+import time
 from pathlib import Path
 import csv
 
@@ -82,6 +83,30 @@ def get_rpc_urls() -> list[str]:
         if urls:
             return urls
     return [os.environ["ARBITRUM_RPC_URL"]]
+
+
+def _resolve_leg_with_retry(w3, leg_a: str, leg_b: str, attempts: int = 4, delay: float = 5.0):
+    """
+    find_any_pool() runs at startup only (once per leg, not per block),
+    but still goes over the same free-tier RPC that throws transient
+    408/429/-32603 errors throughout this project. A ValueError means
+    "no pool exists" -- retrying won't change that -- so only retry on
+    other exceptions (RPC hiccups).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return find_any_pool(w3, leg_a, leg_b)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- transient RPC error, worth retrying
+            last_exc = exc
+            print(
+                f"  {leg_a} <-> {leg_b}: attempt {attempt}/{attempts} failed ({exc}); "
+                f"retrying in {delay}s..."
+            )
+            time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
 
 
 def build_pool(dex: str, address: str, chain_id: int, state_block: int):
@@ -136,7 +161,7 @@ def main() -> None:
     # *state* is re-read per block below, not their identity.
     resolved_legs: list[tuple[str, str, int | None]] = []
     for leg_a, leg_b in legs:
-        dex, address, fee, reserve_a = find_any_pool(fork.w3, leg_a, leg_b)
+        dex, address, fee, reserve_a = _resolve_leg_with_retry(fork.w3, leg_a, leg_b)
         fee_label = f" (fee tier {fee / 10000}%)" if fee is not None else ""
         reserve_label = f", raw_reserve={reserve_a}" if reserve_a is not None else ""
         print(f"  {leg_a} <-> {leg_b}: {dex} pool {address}{fee_label}{reserve_label}")
