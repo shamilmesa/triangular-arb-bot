@@ -45,9 +45,16 @@ def main() -> None:
         for name_b in names[i + 1 :]:
             addr_a, addr_b = CANDIDATES[name_a], CANDIDATES[name_b]
             try:
-                dex, pool_address, fee = find_any_pool(w3, addr_a, addr_b)
+                dex, pool_address, fee, reserve_a = find_any_pool(w3, addr_a, addr_b)
                 fee_label = f" (fee {fee / 10000}%)" if fee is not None else ""
-                print(f"{name_a:6} <-> {name_b:6}: FOUND on {dex}{fee_label}  {pool_address}")
+                # Raw reserve units, not decimal-adjusted (USDC is 6
+                # decimals, most others 18) -- good enough to eyeball
+                # "is this dust or real", not meant to be human-scaled.
+                reserve_label = f", raw_reserve_{name_a}={reserve_a}" if reserve_a is not None else ""
+                print(
+                    f"{name_a:6} <-> {name_b:6}: FOUND on {dex}{fee_label}  "
+                    f"{pool_address}{reserve_label}"
+                )
                 found_pairs.append((name_a, name_b, dex))
             except ValueError as exc:
                 print(f"{name_a:6} <-> {name_b:6}: none ({exc})")

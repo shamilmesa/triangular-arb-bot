@@ -119,17 +119,19 @@ def main() -> None:
     pools = []
     for leg_a, leg_b in legs:
         try:
-            dex, address, fee = find_any_pool(fork.w3, leg_a, leg_b)
+            dex, address, fee, reserve_a = find_any_pool(fork.w3, leg_a, leg_b)
         except ValueError as exc:
             print(f"\nFAILED to build cycle: {exc}")
             print(
-                "This leg has no direct pool on Camelot V2 or Uniswap V3. Most mid-cap "
-                "tokens only pair against WETH -- try a different --token-c, or verify "
-                "manually on app.camelot.exchange / app.uniswap.org whether this pair exists."
+                "This leg has no direct pool on Camelot V2, SushiSwap V2, or Uniswap V3. "
+                "Most mid-cap tokens only pair against WETH -- try a different --token-c, "
+                "or verify manually on app.camelot.exchange / app.uniswap.org whether this "
+                "pair exists."
             )
             return
         fee_label = f" (fee tier {fee / 10000}%)" if fee is not None else ""
-        print(f"  {leg_a} <-> {leg_b}: {dex} pool {address}{fee_label}")
+        reserve_label = f", raw_reserve={reserve_a}" if reserve_a is not None else ""
+        print(f"  {leg_a} <-> {leg_b}: {dex} pool {address}{fee_label}{reserve_label}")
         pools.append(build_pool(fork.w3, dex, address, chain_id))
 
     arb = UniswapLpCycle(

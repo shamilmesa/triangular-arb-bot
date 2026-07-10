@@ -181,25 +181,57 @@ _STANDARD_GET_RESERVES_ABI = [
 ]
 
 
-def find_camelot_v2_pool_address(w3, token_a: str, token_b: str) -> str:
-    """Resolve a Camelot V2 pool address and verify it actually has reserves."""
-    factory = w3.eth.contract(
-        address=w3.to_checksum_address(CAMELOT_V2_FACTORY), abi=_CAMELOT_FACTORY_ABI
-    )
+def _get_v2_pool_and_reserve_a(
+    w3, factory_address: str, factory_abi: list, reserves_abi: list, token_a: str, token_b: str
+) -> tuple[str, int]:
+    """
+    Resolve a UniswapV2-style pool address and return (address,
+    reserve_of_token_a). Raises ValueError if no pool exists or it has
+    empty reserves. Returning token_a's own reserve (not token_b's, and
+    not some derived USD value) keeps the comparison in find_any_pool()
+    valid across different token decimals: for a given (token_a,
+    token_b) query, every candidate DEX's reserve of the *same* token_a
+    is directly comparable, no price oracle needed.
+    """
+    factory = w3.eth.contract(address=w3.to_checksum_address(factory_address), abi=factory_abi)
     pool_address = factory.functions.getPair(
         w3.to_checksum_address(token_a),
         w3.to_checksum_address(token_b),
     ).call()
     if int(pool_address, 16) == 0:
-        raise ValueError(f"No Camelot V2 pool deployed between {token_a} and {token_b}")
+        raise ValueError(f"No pool deployed between {token_a} and {token_b}")
 
-    pool = w3.eth.contract(
-        address=w3.to_checksum_address(pool_address), abi=_CAMELOT_GET_RESERVES_ABI
-    )
+    pool = w3.eth.contract(address=w3.to_checksum_address(pool_address), abi=reserves_abi)
     reserve0, reserve1, *_ = pool.functions.getReserves().call()
     if reserve0 == 0 or reserve1 == 0:
-        raise ValueError(f"Camelot V2 pool {pool_address} exists but has empty reserves")
-    return pool_address
+        raise ValueError(f"Pool {pool_address} exists but has empty reserves")
+
+    token0 = pool_token0(w3, pool_address)
+    reserve_a = reserve0 if token0.lower() == token_a.lower() else reserve1
+    return pool_address, reserve_a
+
+
+_TOKEN0_ABI = [
+    {
+        "inputs": [],
+        "name": "token0",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+
+def pool_token0(w3, pool_address: str) -> str:
+    pool = w3.eth.contract(address=w3.to_checksum_address(pool_address), abi=_TOKEN0_ABI)
+    return pool.functions.token0().call()
+
+
+def find_camelot_v2_pool_address(w3, token_a: str, token_b: str) -> tuple[str, int]:
+    """Resolve a Camelot V2 pool and verify it actually has reserves. Returns (address, reserve_a)."""
+    return _get_v2_pool_and_reserve_a(
+        w3, CAMELOT_V2_FACTORY, _CAMELOT_FACTORY_ABI, _CAMELOT_GET_RESERVES_ABI, token_a, token_b
+    )
 
 
 # SushiSwap V2 factory: same address across Ethereum, Arbitrum, Polygon
@@ -211,50 +243,54 @@ SUSHISWAP_V2_FACTORY = "0xc35DADB65012eC5796536bD9864eD8773aBc74C4"
 _SUSHISWAP_FACTORY_ABI = _CAMELOT_FACTORY_ABI  # identical getPair(tokenA, tokenB) shape
 
 
-def find_sushiswap_v2_pool_address(w3, token_a: str, token_b: str) -> str:
-    """Resolve a SushiSwap V2 pool address and verify it actually has reserves."""
-    factory = w3.eth.contract(
-        address=w3.to_checksum_address(SUSHISWAP_V2_FACTORY), abi=_SUSHISWAP_FACTORY_ABI
+def find_sushiswap_v2_pool_address(w3, token_a: str, token_b: str) -> tuple[str, int]:
+    """Resolve a SushiSwap V2 pool and verify it actually has reserves. Returns (address, reserve_a)."""
+    return _get_v2_pool_and_reserve_a(
+        w3, SUSHISWAP_V2_FACTORY, _SUSHISWAP_FACTORY_ABI, _STANDARD_GET_RESERVES_ABI, token_a, token_b
     )
-    pool_address = factory.functions.getPair(
-        w3.to_checksum_address(token_a),
-        w3.to_checksum_address(token_b),
-    ).call()
-    if int(pool_address, 16) == 0:
-        raise ValueError(f"No SushiSwap V2 pool deployed between {token_a} and {token_b}")
-
-    pool = w3.eth.contract(
-        address=w3.to_checksum_address(pool_address), abi=_STANDARD_GET_RESERVES_ABI
-    )
-    reserve0, reserve1, *_ = pool.functions.getReserves().call()
-    if reserve0 == 0 or reserve1 == 0:
-        raise ValueError(f"SushiSwap V2 pool {pool_address} exists but has empty reserves")
-    return pool_address
 
 
-def find_any_pool(w3, token_a: str, token_b: str) -> tuple[str, str, int | None]:
+def find_any_pool(w3, token_a: str, token_b: str) -> tuple[str, str, int | None, int | None]:
     """
-    Try Camelot V2, SushiSwap V2, then Uniswap V3 (cheapest checks
-    first). Returns (dex, pool_address, fee) where dex is "camelot_v2"
-    / "sushiswap_v2" (fee is None for both) or "uniswap_v3" (fee is the
-    tier used). Raises ValueError if none of the three has a usable
-    pool for this pair -- which is the expected outcome for most
-    combinations of non-tier-1 tokens, since most pools route through
-    WETH rather than pairing two mid-caps directly. Verify a direct
-    pair actually exists (check each DEX's UI) before assuming this
-    will succeed.
+    Check Camelot V2 and SushiSwap V2 for this pair and, if both exist,
+    return whichever has the DEEPER reserve of token_a -- not just
+    whichever DEX happens to be checked first. Confirmed necessary
+    against a real case: Camelot had a near-empty MAGIC/WETH pool
+    (dust-level reserves) while a genuinely liquid one existed on
+    SushiSwap, and picking "first found" silently returned the dead one.
+    Falls back to Uniswap V3 only if neither V2-style DEX has anything
+    (V3's liquidity() isn't directly comparable to V2 reserves, so it's
+    kept as a separate last resort rather than compared numerically).
+
+    Returns (dex, pool_address, fee, reserve_a): dex is "camelot_v2" /
+    "sushiswap_v2" (fee is None) or "uniswap_v3" (fee is the tier used,
+    reserve_a is None since V3 doesn't expose a directly comparable
+    reserve figure). reserve_a is the winning pool's raw reserve of
+    token_a -- print it before trusting a result; a pool can pass the
+    "non-zero" check while still holding dust-level liquidity.
+    Raises ValueError if nothing usable exists anywhere -- the expected
+    outcome for most combinations of non-tier-1 tokens, since most
+    pools route through WETH rather than pairing two mid-caps directly.
     """
+    v2_candidates: list[tuple[str, str, int]] = []  # (dex, address, reserve_a)
     try:
-        return "camelot_v2", find_camelot_v2_pool_address(w3, token_a, token_b), None
+        address, reserve_a = find_camelot_v2_pool_address(w3, token_a, token_b)
+        v2_candidates.append(("camelot_v2", address, reserve_a))
     except ValueError:
         pass
     try:
-        return "sushiswap_v2", find_sushiswap_v2_pool_address(w3, token_a, token_b), None
+        address, reserve_a = find_sushiswap_v2_pool_address(w3, token_a, token_b)
+        v2_candidates.append(("sushiswap_v2", address, reserve_a))
     except ValueError:
         pass
+
+    if v2_candidates:
+        dex, address, reserve_a = max(v2_candidates, key=lambda c: c[2])
+        return dex, address, None, reserve_a
+
     try:
         address, fee = find_v3_pool_address(w3, token_a, token_b)
-        return "uniswap_v3", address, fee
+        return "uniswap_v3", address, fee, None
     except ValueError:
         pass
     raise ValueError(
