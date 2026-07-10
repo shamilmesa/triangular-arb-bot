@@ -58,40 +58,38 @@ no need to reinstall it, it's not tied to a specific repo directory.
      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
    ```
 
-## CRITICAL: verify the cycle exists before running
+## STEP 1 (do this first): find a real cycle with check_pair_candidates.py
 
-`src/simulate_triangular_arbitrage.py` defaults `--token-a` to WETH and
-`--token-b` to GRAIL (both addresses verified against Arbiscan). It has
-**no default for `--token-c`** and no second non-tier-1 address is
-hardcoded in `src/pools.py` -- deliberately, because I couldn't verify
-one during development.
+`src/pools.py` has verified addresses (checked against Arbiscan) for
+four non-tier-1 candidates: **GRAIL**, **MAGIC** (Treasure DAO), **DPX**
+(Dopex), **RDNT** (Radiant Capital). Web research during development
+could **not** confirm whether a direct pool exists between any two of
+them -- most mid-cap Arbitrum tokens only pair against WETH/USDC, not
+against each other. One concrete finding: MAGIC's most liquid pool
+turned out to be on **SushiSwap**, not Camelot or Uniswap V3, which is
+why `find_any_pool()` now checks all three DEXs.
 
-**Before running anything**, do this by hand:
+Rather than keep guessing from web search results (which get
+403'd/blocked from a sandboxed session anyway), run this first -- it
+needs live RPC access, so run it on the VDS:
 
-1. Pick a candidate third token. Reasonable Arbitrum-native candidates
-   to research: MAGIC (Treasure DAO), RDNT (Radiant Capital), DPX
-   (Dopex). Look up the real contract address on
-   [Arbiscan](https://arbiscan.io) or CoinGecko -- do not trust any
-   address pasted into a chat that wasn't independently checked.
-2. Check whether a **direct pool** exists between GRAIL and your
-   candidate token on **both** [Camelot](https://app.camelot.exchange/)
-   and [Uniswap V3](https://app.uniswap.org/) (search the pair
-   directly, not just each token separately). This is the step most
-   likely to fail: most mid-cap tokens only pair against WETH, not
-   against each other. If no direct GRAIL/TokenC pool exists with real
-   liquidity, this specific cycle can't be built at all -- pick a
-   different token or a different `--token-b`.
-3. Also sanity-check the pool's liquidity depth on whichever DEX has
-   it -- a thin pool will show inflated theoretical profit that
-   wouldn't survive real execution slippage.
+```
+source .venv/bin/activate
+python src/check_pair_candidates.py
+```
 
-The script itself will tell you clearly if a leg has no usable pool
-(`find_any_pool` raises with a message naming which pair failed) rather
-than silently producing a wrong number -- but confirming by hand first
-saves an Anvil fork's worth of RPC calls when the pair simply doesn't
-exist.
+This checks every pairwise combination among {WETH, USDC, GRAIL, MAGIC,
+DPX, RDNT} across Camelot V2, SushiSwap V2, and Uniswap V3 in a few
+seconds (no Anvil fork needed for this step -- just direct read calls),
+and prints which ones actually have a usable pool. Look for **three**
+pairs that connect all three tokens in a cycle (e.g. WETH-GRAIL,
+GRAIL-X, X-WETH) before moving to Step 2. If nothing forms a full
+triangle among these four candidates, you'll need to research a
+different third or fourth token yourself -- same rule as everywhere
+else in this project: verify the address and the pool independently,
+don't trust one pulled from a chat/search result.
 
-## Usage
+## STEP 2: run the simulation
 
 ```
 python src/simulate_triangular_arbitrage.py --token-c 0xYourVerifiedTokenCAddress
@@ -100,10 +98,16 @@ python src/simulate_triangular_arbitrage.py --token-a 0x... --token-b 0x... --to
 ```
 
 Forks Arbitrum at the given block (or latest), resolves a pool for each
-of the three legs (tries Camelot V2 first, then Uniswap V3, for each
-pair independently -- the three legs don't have to be on the same
-DEX), and reports the profit-maximizing trade size at that block's
-state.
+of the three legs (tries Camelot V2, then SushiSwap V2, then Uniswap
+V3, for each pair independently -- the three legs don't have to be on
+the same DEX), and reports the profit-maximizing trade size at that
+block's state. `--token-a` defaults to WETH, `--token-b` to GRAIL; both
+have no default for `--token-c` since Step 1 needs to tell you what
+actually works.
+
+Also sanity-check the pool's liquidity depth (printed in the output)
+on whichever DEX has it -- a thin pool will show inflated theoretical
+profit that wouldn't survive real execution slippage.
 
 ## What this does NOT do yet
 
@@ -114,11 +118,11 @@ state.
   statistics instead of single-point checks.
 - No live execution against the real mempool/sequencer -- this is
   research-only.
-- Only checks Camelot V2 and Uniswap V3. Camelot V3 (Algebra engine,
-  different factory + event shape) and other Arbitrum DEXs (Ramses,
-  Zyberswap, etc.) aren't covered -- their factory addresses need
-  independent verification before adding, same caveat as everywhere
-  else in this project.
+- Only checks Camelot V2, SushiSwap V2, and Uniswap V3. Camelot V3
+  (Algebra engine, different factory + event shape) and other Arbitrum
+  DEXs (Ramses, Zyberswap, etc.) aren't covered -- their factory
+  addresses need independent verification before adding, same caveat
+  as everywhere else in this project.
 - Profit numbers are gross (pool fees only), before gas and before any
   latency-based competition for inclusion.
 

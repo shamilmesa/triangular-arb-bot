@@ -19,11 +19,16 @@ ARB = "0x912CE59144191C1204E64559FE8253a0e49E6548"  # Arbitrum governance token 
 # https://app.camelot.exchange/ before using.
 GRAIL = "0x3d9907F9a368ad0a51Be60f7Da3b97cf940982D8"
 
-# Mid-cap Arbitrum-native DeFi tokens worth checking for the third leg
-# of a triangular cycle, but NOT hardcoded here since their addresses
-# weren't independently verified during development -- look them up on
-# Arbiscan/CoinGecko yourself and pass via CLI before use:
-#   MAGIC (Treasure DAO), RDNT (Radiant Capital), DPX (Dopex)
+# Mid-cap Arbitrum-native DeFi tokens -- candidates for a third leg.
+# Addresses verified against Arbiscan (July 2026), but NOT the pool
+# structure: web search could not confirm a *direct* pool between any
+# two of these (or against GRAIL) that doesn't route through WETH/USDC.
+# MAGIC's most liquid pool in particular is on SushiSwap, not
+# Camelot/Uniswap V3 -- see check_pair_candidates.py, which tests every
+# combination directly on-chain instead of guessing from search results.
+MAGIC = "0x539bdE0d7Dbd336b79148AA742883198BBF60342"  # Treasure DAO
+DPX = "0x6C2C06790b3E3E3c38e12Ee22F8183b37a13EE55"  # Dopex
+RDNT = "0x3082CC23568eA640225c2467653dB90e9250AaA0"  # Radiant Capital (current v2 token)
 
 # Uniswap V3 factory: deployed at the same address on Ethereum, Arbitrum,
 # Optimism, Polygon and Base via a deterministic (CREATE2) deployer.
@@ -175,19 +180,52 @@ def find_camelot_v2_pool_address(w3, token_a: str, token_b: str) -> str:
     return pool_address
 
 
+# SushiSwap V2 factory: same address across Ethereum, Arbitrum, Polygon
+# (deterministic deployer, like Uniswap V3's). MAGIC's most liquid pool
+# was found here during research, not on Camelot/Uniswap V3 -- worth
+# checking for any non-tier-1 pair, not just MAGIC specifically.
+SUSHISWAP_V2_FACTORY = "0xc35DADB65012eC5796536bD9864eD8773aBc74C4"
+
+_SUSHISWAP_FACTORY_ABI = _CAMELOT_FACTORY_ABI  # identical getPair(tokenA, tokenB) shape
+
+
+def find_sushiswap_v2_pool_address(w3, token_a: str, token_b: str) -> str:
+    """Resolve a SushiSwap V2 pool address and verify it actually has reserves."""
+    factory = w3.eth.contract(
+        address=w3.to_checksum_address(SUSHISWAP_V2_FACTORY), abi=_SUSHISWAP_FACTORY_ABI
+    )
+    pool_address = factory.functions.getPair(
+        w3.to_checksum_address(token_a),
+        w3.to_checksum_address(token_b),
+    ).call()
+    if int(pool_address, 16) == 0:
+        raise ValueError(f"No SushiSwap V2 pool deployed between {token_a} and {token_b}")
+
+    pool = w3.eth.contract(address=w3.to_checksum_address(pool_address), abi=_GET_RESERVES_ABI)
+    reserve0, reserve1, *_ = pool.functions.getReserves().call()
+    if reserve0 == 0 or reserve1 == 0:
+        raise ValueError(f"SushiSwap V2 pool {pool_address} exists but has empty reserves")
+    return pool_address
+
+
 def find_any_pool(w3, token_a: str, token_b: str) -> tuple[str, str, int | None]:
     """
-    Try Camelot V2 first (single check, no fee-tier search needed), then
-    Uniswap V3. Returns (dex, pool_address, fee) where dex is
-    "camelot_v2" (fee is None) or "uniswap_v3" (fee is the tier used).
-    Raises ValueError if neither DEX has a usable pool for this pair --
-    which is the expected outcome for most combinations of non-tier-1
-    tokens, since most pools route through WETH rather than pairing two
-    mid-caps directly. Verify a direct pair actually exists (check both
-    DEXs' UIs) before assuming this will succeed.
+    Try Camelot V2, SushiSwap V2, then Uniswap V3 (cheapest checks
+    first). Returns (dex, pool_address, fee) where dex is "camelot_v2"
+    / "sushiswap_v2" (fee is None for both) or "uniswap_v3" (fee is the
+    tier used). Raises ValueError if none of the three has a usable
+    pool for this pair -- which is the expected outcome for most
+    combinations of non-tier-1 tokens, since most pools route through
+    WETH rather than pairing two mid-caps directly. Verify a direct
+    pair actually exists (check each DEX's UI) before assuming this
+    will succeed.
     """
     try:
         return "camelot_v2", find_camelot_v2_pool_address(w3, token_a, token_b), None
+    except ValueError:
+        pass
+    try:
+        return "sushiswap_v2", find_sushiswap_v2_pool_address(w3, token_a, token_b), None
     except ValueError:
         pass
     try:
@@ -196,5 +234,6 @@ def find_any_pool(w3, token_a: str, token_b: str) -> tuple[str, str, int | None]
     except ValueError:
         pass
     raise ValueError(
-        f"No usable pool (Camelot V2 or Uniswap V3) found between {token_a} and {token_b}"
+        f"No usable pool (Camelot V2, SushiSwap V2, or Uniswap V3) found "
+        f"between {token_a} and {token_b}"
     )

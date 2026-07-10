@@ -3,9 +3,10 @@ Triangular arbitrage simulation across a 3-token cycle on Arbitrum,
 using non-tier-1 tokens deliberately (see README for why).
 
 Checks a cycle: token_a -> token_b -> token_c -> token_a, using
-whichever of Camelot V2 / Uniswap V3 actually has a usable pool for
-each of the three pairs (find_any_pool tries both). Runs entirely
-against a local Anvil fork -- no real funds, no live transactions.
+whichever of Camelot V2 / SushiSwap V2 / Uniswap V3 actually has a
+usable pool for each of the three pairs (find_any_pool tries all
+three). Runs entirely against a local Anvil fork -- no real funds, no
+live transactions.
 
 Why non-tier-1 tokens: prior testing (see the arb-bot repo this project
 was spun out of) found 0 profitable blocks out of 8 checked for
@@ -18,15 +19,14 @@ tightly arbitraged -- both because the pairs themselves get less
 attention, and because 3-hop cycles are more expensive for searchers to
 continuously monitor than simple 2-pool comparisons.
 
-IMPORTANT: --token-c has no default and no verified address is
-hardcoded for it in src/pools.py beyond WETH and GRAIL. Before running,
-verify on Arbiscan (and check the pair actually shows a direct pool on
-https://app.camelot.exchange/ or https://app.uniswap.org/, not just a
-token contract) that a real, liquid pool exists between GRAIL (or
-whatever you pick for --token-b) and your chosen --token-c. Most
-mid-cap tokens only pair against WETH, not against each other directly
--- if no direct pool exists, this cycle can't be built at all, and
-you'll need a different third token.
+IMPORTANT: --token-c has no default. src/pools.py has verified
+addresses for MAGIC, DPX, and RDNT as candidates, but web research
+could NOT confirm a direct pool between any two of {GRAIL, MAGIC, DPX,
+RDNT} -- most mid-cap tokens only pair against WETH/USDC, not each
+other. Run check_pair_candidates.py FIRST (needs live RPC, so run it on
+the VDS, not in a sandboxed session) to find out on-chain, in seconds,
+which pairs among your candidates actually have a usable pool, instead
+of guessing and burning an Anvil fork on a cycle that can't be built.
 
 Usage:
   python src/simulate_triangular_arbitrage.py --token-c 0x...
@@ -38,7 +38,7 @@ import os
 
 from dotenv import load_dotenv
 
-from degenbot import CamelotLiquidityPool, Erc20Token, UniswapV3Pool, set_web3
+from degenbot import CamelotLiquidityPool, Erc20Token, SushiswapV2Pool, UniswapV3Pool, set_web3
 from degenbot.arbitrage.uniswap_lp_cycle import UniswapLpCycle
 
 from pools import GRAIL, WETH, find_any_pool
@@ -73,6 +73,8 @@ def parse_args() -> argparse.Namespace:
 def build_pool(w3, dex: str, address: str, chain_id: int):
     if dex == "camelot_v2":
         return CamelotLiquidityPool(address=address, chain_id=chain_id)
+    if dex == "sushiswap_v2":
+        return SushiswapV2Pool(address=address, chain_id=chain_id)
     if dex == "uniswap_v3":
         return UniswapV3Pool(address=address, chain_id=chain_id)
     raise ValueError(f"Unknown dex {dex}")
