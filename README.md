@@ -109,13 +109,41 @@ Also sanity-check the pool's liquidity depth (printed in the output)
 on whichever DEX has it -- a thin pool will show inflated theoretical
 profit that wouldn't survive real execution slippage.
 
+## STEP 3 (optional): batch scan across many blocks
+
+Once Step 2 shows a cycle that actually builds (all three legs resolve
+to a real pool, no "not initialized" crash), you can check many blocks
+in one run instead of one at a time:
+
+```
+python src/historical_scan_triangular.py \
+  --token-b 0x539bdE0d7Dbd336b79148AA742883198BBF60342 \
+  --token-c 0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a \
+  --start 482400000 --end 482470000 --step 2000
+```
+
+This reuses a single Anvil fork across the whole scan (resetting it to
+each block instead of respawning the process each time), same pattern
+as arb-bot's `historical_scan.py`. Results go to
+`data/triangular_scan_results.csv` (gitignored) -- one row per block
+with whether it was profitable and the optimal input/profit if so.
+
+Pick `--step` with care: single-block checks earlier in this project
+found the MAGIC-GMX and WETH-GMX pools' on-chain state completely
+unchanged across an ~11,000 block span (i.e. those pools saw no trades
+at all in that window), so a `--step` of 1 mostly re-checks identical
+state. A few thousand is a more useful starting point; tighten it if
+you confirm the pair you're scanning trades more frequently than that.
+
+Not every triangle can be scanned this way -- some Uniswap V3 pools
+pass the basic `liquidity() != 0` check in `find_any_pool()` but still
+fail degenbot's internal tick-range check ("Pool ... is not
+initialized"). If Step 2 hits that error for one of your legs, that
+triangle isn't usable with this tool; pick a different third token
+instead of scanning around the problem.
+
 ## What this does NOT do yet
 
-- Single-block only, like arb-bot's `simulate_arbitrage.py` /
-  `simulate_camelot_arbitrage.py` (its "Stage 2"). No batch scanner
-  across a block range yet -- port the pattern from arb-bot's
-  `historical_scan.py` if you want real frequency/profit-distribution
-  statistics instead of single-point checks.
 - No live execution against the real mempool/sequencer -- this is
   research-only.
 - Only checks Camelot V2, SushiSwap V2, and Uniswap V3. Camelot V3
