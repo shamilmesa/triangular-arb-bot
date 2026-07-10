@@ -58,6 +58,22 @@ no need to reinstall it, it's not tied to a specific repo directory.
      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
    ```
 
+## Running under resource limits (VDS running other tests)
+
+If this VDS is also running an unrelated, longer test in a different
+directory, use `run_limited.sh` instead of calling `python3` directly
+for anything in Steps 2-3 -- it wraps the command in
+`nice -n 15 ionice -c3 systemd-run --scope -p MemoryMax=700M --user`
+automatically so you don't retype it every time:
+
+```
+./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-c 0x...
+./run_limited.sh python3 src/historical_scan_triangular.py --token-b 0x... --token-c 0x... --start N --end M --step S
+```
+
+`check_pair_candidates.py` (Step 1) is cheap (direct read calls, no
+Anvil fork) and doesn't need the wrapper.
+
 ## STEP 1 (do this first): find a real cycle with check_pair_candidates.py
 
 `src/pools.py` has verified addresses (checked against Arbiscan) for
@@ -92,9 +108,9 @@ don't trust one pulled from a chat/search result.
 ## STEP 2: run the simulation
 
 ```
-python src/simulate_triangular_arbitrage.py --token-c 0xYourVerifiedTokenCAddress
-python src/simulate_triangular_arbitrage.py --token-c 0x... --block 482140000
-python src/simulate_triangular_arbitrage.py --token-a 0x... --token-b 0x... --token-c 0x...
+./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-c 0xYourVerifiedTokenCAddress
+./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-c 0x... --block 482140000
+./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-a 0x... --token-b 0x... --token-c 0x...
 ```
 
 Forks Arbitrum at the given block (or latest), resolves a pool for each
@@ -116,7 +132,7 @@ to a real pool, no "not initialized" crash), you can check many blocks
 in one run instead of one at a time:
 
 ```
-python src/historical_scan_triangular.py \
+./run_limited.sh python3 src/historical_scan_triangular.py \
   --token-b 0x539bdE0d7Dbd336b79148AA742883198BBF60342 \
   --token-c 0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a \
   --start 482400000 --end 482470000 --step 2000
