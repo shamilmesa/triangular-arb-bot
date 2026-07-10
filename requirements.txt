@@ -1,0 +1,3 @@
+degenbot==0.3.0
+web3==7.16.0
+python-dotenv==1.0.1
