@@ -3,13 +3,17 @@ Run this FIRST, on the VDS (needs live RPC access -- won't work in a
 network-restricted sandbox), before touching
 simulate_triangular_arbitrage.py.
 
-Web research during development could NOT confirm whether a direct
-pool exists between any two of {GRAIL, MAGIC, DPX, RDNT} -- most
-mid-cap Arbitrum tokens only pair against WETH/USDC, not against each
-other. Rather than guess further, this checks every combination
+First pass (GRAIL, MAGIC, DPX, RDNT) found that only MAGIC has real
+depth (~41 WETH reserve on SushiSwap) -- GRAIL, DPX, and RDNT all
+turned out to be dust (raw reserves in the 0.0001-0.06 range against
+WETH), even after comparing across DEXs. GMX and PENDLE are larger,
+more actively-traded Arbitrum-ecosystem tokens added for this second
+pass. Rather than guess from web search, this checks every combination
 directly on-chain via find_any_pool(), which takes seconds and is
 authoritative (no anvil fork needed -- these are all just direct read
-calls against your RPC provider).
+calls against your RPC provider). Watch the raw_reserve numbers in the
+output, not just whether a pool was "FOUND" -- a pool can exist with
+essentially nothing in it.
 
 Usage:
   python src/check_pair_candidates.py
@@ -20,7 +24,7 @@ import os
 from dotenv import load_dotenv
 from web3 import Web3
 
-from pools import DPX, GRAIL, MAGIC, RDNT, USDC_NATIVE, WETH, find_any_pool
+from pools import DPX, GMX, GRAIL, MAGIC, PENDLE, RDNT, USDC_NATIVE, WETH, find_any_pool
 
 CANDIDATES = {
     "WETH": WETH,
@@ -29,6 +33,8 @@ CANDIDATES = {
     "MAGIC": MAGIC,
     "DPX": DPX,
     "RDNT": RDNT,
+    "GMX": GMX,
+    "PENDLE": PENDLE,
 }
 
 

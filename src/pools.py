@@ -30,6 +30,14 @@ MAGIC = "0x539bdE0d7Dbd336b79148AA742883198BBF60342"  # Treasure DAO
 DPX = "0x6C2C06790b3E3E3c38e12Ee22F8183b37a13EE55"  # Dopex
 RDNT = "0x3082CC23568eA640225c2467653dB90e9250AaA0"  # Radiant Capital (current v2 token)
 
+# On-chain check confirmed GRAIL, DPX, and RDNT all have only dust-level
+# reserves in practice (raw reserves in the 0.0001-0.06 range against
+# WETH, essentially nothing) -- only MAGIC (~41 WETH reserve on
+# SushiSwap) had real depth among the four. GMX and PENDLE are larger,
+# more actively-traded Arbitrum-ecosystem tokens worth checking instead.
+GMX = "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
+PENDLE = "0x0c880f6761f1af8d9aa9c466984b80dab9a8c9e8"
+
 # Uniswap V3 factory: deployed at the same address on Ethereum, Arbitrum,
 # Optimism, Polygon and Base via a deterministic (CREATE2) deployer.
 UNISWAP_V3_FACTORY = "0x1F98431c8aD98523631AE4a59f267346ea31F984"
