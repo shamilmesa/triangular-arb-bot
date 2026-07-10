@@ -145,7 +145,9 @@ _CAMELOT_FACTORY_ABI = [
     }
 ]
 
-_GET_RESERVES_ABI = [
+# Camelot's modified UniswapV2 fork bakes per-token dynamic fees into
+# getReserves() -- 4 return values instead of the standard 3.
+_CAMELOT_GET_RESERVES_ABI = [
     {
         "inputs": [],
         "name": "getReserves",
@@ -154,6 +156,24 @@ _GET_RESERVES_ABI = [
             {"internalType": "uint112", "name": "reserve1", "type": "uint112"},
             {"internalType": "uint16", "name": "token0FeePercent", "type": "uint16"},
             {"internalType": "uint16", "name": "token1FeePercent", "type": "uint16"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+# Standard Uniswap V2 pair ABI (SushiSwap and most other V2 forks use
+# this exact shape) -- 3 return values, NOT Camelot's 4. Using the
+# wrong one causes eth_abi to fail decoding with NonEmptyPaddingBytes,
+# confirmed against a real SushiSwap pool during development.
+_STANDARD_GET_RESERVES_ABI = [
+    {
+        "inputs": [],
+        "name": "getReserves",
+        "outputs": [
+            {"internalType": "uint112", "name": "reserve0", "type": "uint112"},
+            {"internalType": "uint112", "name": "reserve1", "type": "uint112"},
+            {"internalType": "uint32", "name": "blockTimestampLast", "type": "uint32"},
         ],
         "stateMutability": "view",
         "type": "function",
@@ -173,7 +193,9 @@ def find_camelot_v2_pool_address(w3, token_a: str, token_b: str) -> str:
     if int(pool_address, 16) == 0:
         raise ValueError(f"No Camelot V2 pool deployed between {token_a} and {token_b}")
 
-    pool = w3.eth.contract(address=w3.to_checksum_address(pool_address), abi=_GET_RESERVES_ABI)
+    pool = w3.eth.contract(
+        address=w3.to_checksum_address(pool_address), abi=_CAMELOT_GET_RESERVES_ABI
+    )
     reserve0, reserve1, *_ = pool.functions.getReserves().call()
     if reserve0 == 0 or reserve1 == 0:
         raise ValueError(f"Camelot V2 pool {pool_address} exists but has empty reserves")
@@ -201,7 +223,9 @@ def find_sushiswap_v2_pool_address(w3, token_a: str, token_b: str) -> str:
     if int(pool_address, 16) == 0:
         raise ValueError(f"No SushiSwap V2 pool deployed between {token_a} and {token_b}")
 
-    pool = w3.eth.contract(address=w3.to_checksum_address(pool_address), abi=_GET_RESERVES_ABI)
+    pool = w3.eth.contract(
+        address=w3.to_checksum_address(pool_address), abi=_STANDARD_GET_RESERVES_ABI
+    )
     reserve0, reserve1, *_ = pool.functions.getReserves().call()
     if reserve0 == 0 or reserve1 == 0:
         raise ValueError(f"SushiSwap V2 pool {pool_address} exists but has empty reserves")

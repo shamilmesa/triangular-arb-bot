@@ -51,6 +51,8 @@ def main() -> None:
                 found_pairs.append((name_a, name_b, dex))
             except ValueError as exc:
                 print(f"{name_a:6} <-> {name_b:6}: none ({exc})")
+            except Exception as exc:  # noqa: BLE001 -- e.g. bad ABI, RPC hiccups; don't abort the run
+                print(f"{name_a:6} <-> {name_b:6}: ERROR, skipped ({exc})")
 
     print("\n--- Summary ---")
     print(f"{len(found_pairs)} pair(s) with a usable pool found:")
