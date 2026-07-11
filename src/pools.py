@@ -235,6 +235,30 @@ def pool_token0(w3, pool_address: str) -> str:
     return pool.functions.token0().call()
 
 
+_ERC20_BALANCE_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+
+def _get_token_balance(w3, token_address: str, holder_address: str) -> int:
+    """
+    Raw balanceOf(), used as the depth metric for a Uniswap V3 pool.
+    Unlike V2's getReserves(), V3 has no single "reserve" number --
+    liquidity() is a virtual-liquidity unit, not a token amount, and
+    isn't comparable to a V2 reserve. The pool's actual token balance is
+    directly comparable across pool types, since it's the same raw units
+    used for V2 reserves above.
+    """
+    token = w3.eth.contract(address=w3.to_checksum_address(token_address), abi=_ERC20_BALANCE_ABI)
+    return token.functions.balanceOf(w3.to_checksum_address(holder_address)).call()
+
+
 def find_camelot_v2_pool_address(w3, token_a: str, token_b: str) -> tuple[str, int]:
     """Resolve a Camelot V2 pool and verify it actually has reserves. Returns (address, reserve_a)."""
     return _get_v2_pool_and_reserve_a(
@@ -258,50 +282,55 @@ def find_sushiswap_v2_pool_address(w3, token_a: str, token_b: str) -> tuple[str,
     )
 
 
-def find_any_pool(w3, token_a: str, token_b: str) -> tuple[str, str, int | None, int | None]:
+def find_any_pool(w3, token_a: str, token_b: str) -> tuple[str, str, int | None, int]:
     """
-    Check Camelot V2 and SushiSwap V2 for this pair and, if both exist,
-    return whichever has the DEEPER reserve of token_a -- not just
-    whichever DEX happens to be checked first. Confirmed necessary
-    against a real case: Camelot had a near-empty MAGIC/WETH pool
-    (dust-level reserves) while a genuinely liquid one existed on
-    SushiSwap, and picking "first found" silently returned the dead one.
-    Falls back to Uniswap V3 only if neither V2-style DEX has anything
-    (V3's liquidity() isn't directly comparable to V2 reserves, so it's
-    kept as a separate last resort rather than compared numerically).
+    Check Camelot V2, SushiSwap V2, and Uniswap V3 for this pair and
+    return whichever holds the DEEPER raw balance of token_a -- not just
+    whichever DEX happens to be checked first or whichever "kind" of DEX
+    it is. Compares by token_a's raw balanceOf() at each candidate pool,
+    which is directly comparable across V2 and V3 alike (V3's
+    liquidity() is a virtual-liquidity unit, not a token amount, so it
+    can't be compared to a V2 reserve directly -- balanceOf() sidesteps
+    that entirely).
+
+    This used to pick the deeper of Camelot/SushiSwap and only fall back
+    to Uniswap V3 if neither V2-style DEX had anything at all -- fixed
+    after that logic picked an ~$18 dust Camelot V2 ARB/USDC pool over
+    what's almost certainly a much deeper Uniswap V3 pool for that pair,
+    without ever comparing the two.
 
     Returns (dex, pool_address, fee, reserve_a): dex is "camelot_v2" /
-    "sushiswap_v2" (fee is None) or "uniswap_v3" (fee is the tier used,
-    reserve_a is None since V3 doesn't expose a directly comparable
-    reserve figure). reserve_a is the winning pool's raw reserve of
-    token_a -- print it before trusting a result; a pool can pass the
-    "non-zero" check while still holding dust-level liquidity.
+    "sushiswap_v2" (fee is None) or "uniswap_v3" (fee is the tier used).
+    reserve_a is the winning pool's raw balance of token_a -- print it
+    before trusting a result; a pool can pass the "non-zero" check while
+    still holding dust-level liquidity.
     Raises ValueError if nothing usable exists anywhere -- the expected
-    outcome for most combinations of non-tier-1 tokens, since most
-    pools route through WETH rather than pairing two mid-caps directly.
+    outcome for most combinations of non-tier-1 tokens, since most pools
+    route through WETH rather than pairing two mid-caps directly.
     """
-    v2_candidates: list[tuple[str, str, int]] = []  # (dex, address, reserve_a)
+    candidates: list[tuple[str, str, int | None, int]] = []  # (dex, address, fee, reserve_a)
     try:
         address, reserve_a = find_camelot_v2_pool_address(w3, token_a, token_b)
-        v2_candidates.append(("camelot_v2", address, reserve_a))
+        candidates.append(("camelot_v2", address, None, reserve_a))
     except ValueError:
         pass
     try:
         address, reserve_a = find_sushiswap_v2_pool_address(w3, token_a, token_b)
-        v2_candidates.append(("sushiswap_v2", address, reserve_a))
+        candidates.append(("sushiswap_v2", address, None, reserve_a))
     except ValueError:
         pass
-
-    if v2_candidates:
-        dex, address, reserve_a = max(v2_candidates, key=lambda c: c[2])
-        return dex, address, None, reserve_a
-
     try:
         address, fee = find_v3_pool_address(w3, token_a, token_b)
-        return "uniswap_v3", address, fee, None
+        reserve_a = _get_token_balance(w3, token_a, address)
+        candidates.append(("uniswap_v3", address, fee, reserve_a))
     except ValueError:
         pass
-    raise ValueError(
-        f"No usable pool (Camelot V2, SushiSwap V2, or Uniswap V3) found "
-        f"between {token_a} and {token_b}"
-    )
+
+    if not candidates:
+        raise ValueError(
+            f"No usable pool (Camelot V2, SushiSwap V2, or Uniswap V3) found "
+            f"between {token_a} and {token_b}"
+        )
+
+    dex, address, fee, reserve_a = max(candidates, key=lambda c: c[3])
+    return dex, address, fee, reserve_a
