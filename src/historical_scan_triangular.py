@@ -182,56 +182,89 @@ def main() -> None:
         )
 
         for block in range(args.start, args.end + 1, args.step):
-            try:
-                fork.reset(block_number=block)
-            except Exception as exc:  # noqa: BLE001 -- rotate provider and retry once
-                rpc_index = (rpc_index + 1) % len(rpc_urls)
-                print(f"block {block}: reset failed ({exc}); rotating to {rpc_urls[rpc_index]}")
+            result = None
+            no_arb_exc: Exception | None = None
+            last_error: Exception | None = None
+
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
                 try:
                     fork.reset(block_number=block, fork_url=rpc_urls[rpc_index])
-                except Exception as exc2:  # noqa: BLE001
-                    writer.writerow([block, "", "", "", str(exc2)[:200]])
-                    f.flush()
-                    print(f"block {block}: SKIPPED, reset failed on all providers: {exc2}")
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    rpc_index = (rpc_index + 1) % len(rpc_urls)
+                    print(
+                        f"block {block}: reset attempt {attempt}/{max_attempts} failed "
+                        f"({exc}); retrying via {rpc_urls[rpc_index]}"
+                    )
+                    time.sleep(5)
                     continue
 
-            try:
-                pools = [
-                    build_pool(dex, address, chain_id, state_block=block)
-                    for dex, address, _fee in resolved_legs
-                ]
-                arb = UniswapLpCycle(
-                    input_token=token_a,
-                    swap_pools=pools,
-                    id=f"triangular-{token_a.symbol}-{token_b.symbol}-{token_c.symbol}-{block}",
-                    max_input=10 * 10**18,
-                )
-                result = arb.calculate()
-            except (ArbitrageError, DegenbotValueError) as exc:
-                checked_count += 1
-                writer.writerow([block, False, "", "", str(exc)[:150]])
+                try:
+                    pools = [
+                        build_pool(dex, address, chain_id, state_block=block)
+                        for dex, address, _fee in resolved_legs
+                    ]
+                    arb = UniswapLpCycle(
+                        input_token=token_a,
+                        swap_pools=pools,
+                        id=f"triangular-{token_a.symbol}-{token_b.symbol}-{token_c.symbol}-{block}",
+                        max_input=10 * 10**18,
+                    )
+                    result = arb.calculate()
+                    last_error = None
+                    break
+                except (ArbitrageError, DegenbotValueError) as exc:
+                    no_arb_exc = exc
+                    last_error = None
+                    break
+                except Exception as exc:  # noqa: BLE001 -- e.g. RPC rate limits, transient failures
+                    last_error = exc
+                    rpc_index = (rpc_index + 1) % len(rpc_urls)
+                    print(
+                        f"block {block}: attempt {attempt}/{max_attempts} failed "
+                        f"({exc}); retrying via {rpc_urls[rpc_index]}"
+                    )
+                    time.sleep(5)
+                finally:
+                    for addr in pool_addrs:
+                        pool_registry.remove(addr, chain_id)
+
+            if last_error is not None:
+                writer.writerow([block, "", "", "", str(last_error)[:200]])
                 f.flush()
-                print(f"block {block}: no arbitrage ({exc})")
+                print(f"block {block}: SKIPPED, failed on all {max_attempts} attempts: {last_error}")
                 continue
-            except Exception as exc:  # noqa: BLE001 -- e.g. RPC rate limits, transient failures
-                writer.writerow([block, "", "", "", str(exc)[:200]])
-                f.flush()
-                print(f"block {block}: SKIPPED due to error: {exc}")
-                continue
-            finally:
-                for addr in pool_addrs:
-                    pool_registry.remove(addr, chain_id)
 
             checked_count += 1
-            profitable_count += 1
+
+            if no_arb_exc is not None:
+                writer.writerow([block, False, "", "", str(no_arb_exc)[:150]])
+                f.flush()
+                print(f"block {block}: no arbitrage ({no_arb_exc})")
+                continue
+
+            # calculate() can return a "successful" result with zero profit/input
+            # at a degenerate corner solution (seen in practice for thin-ish
+            # non-tier-1 pools) instead of raising ArbitrageError -- only a
+            # strictly positive profit counts as an actual opportunity.
             profit = result.profit_amount / 10**18
             input_amount = result.input_amount / 10**18
-            writer.writerow([block, True, f"{input_amount:.6f}", f"{profit:.6f}", ""])
-            f.flush()
-            print(
-                f"block {block}: PROFITABLE, input {input_amount:.6f} {token_a.symbol}, "
-                f"profit {profit:.6f} {token_a.symbol}"
+            is_profitable = result.profit_amount > 0
+
+            if is_profitable:
+                profitable_count += 1
+            writer.writerow(
+                [block, is_profitable, f"{input_amount:.6f}", f"{profit:.6f}", ""]
             )
+            f.flush()
+            if is_profitable:
+                print(
+                    f"block {block}: PROFITABLE, input {input_amount:.6f} {token_a.symbol}, "
+                    f"profit {profit:.6f} {token_a.symbol}"
+                )
+            else:
+                print(f"block {block}: no arbitrage (zero-input degenerate result)")
 
     print(f"\nDone. {checked_count} block(s) checked, {profitable_count} profitable.")
     print(f"Results written to {out_path}")
