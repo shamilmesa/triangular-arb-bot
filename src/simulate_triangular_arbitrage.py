@@ -35,6 +35,7 @@ Usage:
 
 import argparse
 import os
+import time
 
 from dotenv import load_dotenv
 
@@ -43,6 +44,29 @@ from degenbot.arbitrage.uniswap_lp_cycle import UniswapLpCycle
 
 from pools import GRAIL, WETH, find_any_pool
 from rate_limited_fork import RateLimitedAnvilFork
+
+
+def _resolve_leg_with_retry(w3, leg_a: str, leg_b: str, attempts: int = 4, delay: float = 5.0):
+    """
+    find_any_pool() goes over the same free-tier RPC that throws
+    transient 408/429/-32603 errors throughout this project. A
+    ValueError means "no pool exists" -- retrying won't change that --
+    so only retry on other exceptions (RPC hiccups).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return find_any_pool(w3, leg_a, leg_b)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- transient RPC error, worth retrying
+            last_exc = exc
+            print(
+                f"  {leg_a} <-> {leg_b}: attempt {attempt}/{attempts} failed ({exc}); "
+                f"retrying in {delay}s..."
+            )
+            time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,7 +143,7 @@ def main() -> None:
     pools = []
     for leg_a, leg_b in legs:
         try:
-            dex, address, fee, reserve_a = find_any_pool(fork.w3, leg_a, leg_b)
+            dex, address, fee, reserve_a = _resolve_leg_with_retry(fork.w3, leg_a, leg_b)
         except ValueError as exc:
             print(f"\nFAILED to build cycle: {exc}")
             print(
