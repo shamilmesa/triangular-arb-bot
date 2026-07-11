@@ -67,8 +67,8 @@ for anything in Steps 2-3 -- it wraps the command in
 automatically so you don't retype it every time:
 
 ```
-./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-c 0x...
-./run_limited.sh python3 src/historical_scan_triangular.py --token-b 0x... --token-c 0x... --start N --end M --step S
+./run_limited.sh src/simulate_triangular_arbitrage.py --token-c 0x...
+./run_limited.sh src/historical_scan_triangular.py --token-b 0x... --token-c 0x... --start N --end M --step S
 ```
 
 `check_pair_candidates.py` (Step 1) is cheap (direct read calls, no
@@ -108,9 +108,9 @@ don't trust one pulled from a chat/search result.
 ## STEP 2: run the simulation
 
 ```
-./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-c 0xYourVerifiedTokenCAddress
-./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-c 0x... --block 482140000
-./run_limited.sh python3 src/simulate_triangular_arbitrage.py --token-a 0x... --token-b 0x... --token-c 0x...
+./run_limited.sh src/simulate_triangular_arbitrage.py --token-c 0xYourVerifiedTokenCAddress
+./run_limited.sh src/simulate_triangular_arbitrage.py --token-c 0x... --block 482140000
+./run_limited.sh src/simulate_triangular_arbitrage.py --token-a 0x... --token-b 0x... --token-c 0x...
 ```
 
 Forks Arbitrum at the given block (or latest), resolves a pool for each
@@ -132,7 +132,7 @@ to a real pool, no "not initialized" crash), you can check many blocks
 in one run instead of one at a time:
 
 ```
-./run_limited.sh python3 src/historical_scan_triangular.py \
+./run_limited.sh src/historical_scan_triangular.py \
   --token-b 0x539bdE0d7Dbd336b79148AA742883198BBF60342 \
   --token-c 0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a \
   --start 482400000 --end 482470000 --step 2000
