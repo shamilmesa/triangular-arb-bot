@@ -69,6 +69,27 @@ def _resolve_leg_with_retry(w3, leg_a: str, leg_b: str, attempts: int = 4, delay
     raise last_exc  # type: ignore[misc]
 
 
+def _build_pool_with_retry(w3, dex: str, address: str, chain_id: int, attempts: int = 4, delay: float = 5.0):
+    """
+    Building a UniswapV3Pool fetches its full tick data -- a deep, real
+    pool has more populated ticks than a dust one, which means more RPC
+    calls and a higher chance of hitting a free-tier timeout/rate-limit
+    partway through. Retry the same way as pool resolution above.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return build_pool(w3, dex, address, chain_id)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            print(
+                f"  building {dex} pool {address}: attempt {attempt}/{attempts} failed "
+                f"({exc}); retrying in {delay}s..."
+            )
+            time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -156,7 +177,7 @@ def main() -> None:
         fee_label = f" (fee tier {fee / 10000}%)" if fee is not None else ""
         reserve_label = f", raw_reserve={reserve_a}" if reserve_a is not None else ""
         print(f"  {leg_a} <-> {leg_b}: {dex} pool {address}{fee_label}{reserve_label}")
-        pools.append(build_pool(fork.w3, dex, address, chain_id))
+        pools.append(_build_pool_with_retry(fork.w3, dex, address, chain_id))
 
     arb = UniswapLpCycle(
         input_token=token_a,
